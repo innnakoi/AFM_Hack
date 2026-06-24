@@ -43,6 +43,21 @@ const fallbackFeed = {
   blocked_data_gb: 1.7,
   protected_assets: 1248,
   active_incidents: 3,
+  device_context: {
+    cpu_percent: 41,
+    memory_percent: 58,
+    disk_percent: 37,
+    active_processes: 0,
+    network_connections: 0,
+    suspicious_ips: [],
+    process_watchlist: [],
+    remote_connections: [],
+    analysis_basis: [
+      'Live CPU, RAM, disk, process, and connection telemetry from the monitored device.',
+      'Process priority is ranked by CPU and resident memory footprint.',
+      'Network evidence is sampled from current remote connections.'
+    ]
+  },
   coverage: [
     { name: 'Unauthorized access', value: 96 },
     { name: 'User anomalies', value: 91 },
@@ -141,6 +156,44 @@ const severityClass = {
   LOW: 'bg-emerald-500/15 text-emerald-100 border-emerald-400/40'
 };
 
+const sections = [
+  {
+    id: 'threat-center',
+    label: 'Threat Center',
+    icon: Siren,
+    categories: null,
+    description: 'All correlated incidents and device-backed AI decisions'
+  },
+  {
+    id: 'access-ai',
+    label: 'Access AI',
+    icon: Fingerprint,
+    categories: ['Unauthorized access'],
+    description: 'Unauthorized access and abnormal user behavior'
+  },
+  {
+    id: 'dlp-control',
+    label: 'DLP Control',
+    icon: FileWarning,
+    categories: ['Data leak prevention'],
+    description: 'Sensitive data exposure and export control'
+  },
+  {
+    id: 'phishing-lab',
+    label: 'Phishing Lab',
+    icon: MailWarning,
+    categories: ['Phishing'],
+    description: 'Phishing, credential capture, and malicious mail patterns'
+  },
+  {
+    id: 'response',
+    label: 'Response',
+    icon: Lock,
+    categories: null,
+    description: 'Playbook actions, containment, and analyst follow-up'
+  }
+];
+
 function cx(...classes) {
   return classes.filter(Boolean).join(' ');
 }
@@ -177,13 +230,36 @@ export default function Dashboard() {
   const [status, setStatus] = useState(null);
   const [feed, setFeed] = useState(fallbackFeed);
   const [selectedId, setSelectedId] = useState(fallbackFeed.signals[0].id);
+  const [activeSection, setActiveSection] = useState('threat-center');
+  const [defenseMode, setDefenseMode] = useState('defend');
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
+  const [actionLog, setActionLog] = useState([]);
+
+  const currentSection = useMemo(() => {
+    return sections.find((section) => section.id === activeSection) || sections[0];
+  }, [activeSection]);
+
+  const visibleSignals = useMemo(() => {
+    if (!currentSection.categories) {
+      return feed.signals;
+    }
+    return feed.signals.filter((signal) => currentSection.categories.includes(signal.category));
+  }, [feed.signals, currentSection]);
 
   const selectedSignal = useMemo(() => {
-    return feed.signals.find((signal) => signal.id === selectedId) || feed.signals[0];
-  }, [feed, selectedId]);
+    return visibleSignals.find((signal) => signal.id === selectedId) || visibleSignals[0] || feed.signals[0];
+  }, [feed.signals, selectedId, visibleSignals]);
+
+  const sectionCounts = useMemo(() => {
+    return sections.reduce((acc, section) => {
+      acc[section.id] = section.categories
+        ? feed.signals.filter((signal) => section.categories.includes(signal.category)).length
+        : feed.signals.length;
+      return acc;
+    }, {});
+  }, [feed.signals]);
 
   const fetchDashboardData = useCallback(async () => {
     try {
@@ -198,6 +274,7 @@ export default function Dashboard() {
         const exists = feedRes.data.signals.some((signal) => signal.id === current);
         return exists ? current : feedRes.data.signals[0]?.id;
       });
+      setDefenseMode((current) => current || feedRes.data.mode || 'defend');
       setChartData((prev) => [
         ...prev,
         {
@@ -231,8 +308,33 @@ export default function Dashboard() {
   }, [fetchDashboardData]);
 
   const runAction = (action) => {
-    setNotice(`${action}: команда добавлена в playbook реагирования`);
+    const entry = {
+      time: new Date().toLocaleTimeString(),
+      action,
+      incident: selectedSignal?.id || 'device',
+      mode: defenseMode
+    };
+    setActionLog((prev) => [entry, ...prev].slice(0, 5));
+    setNotice(`${action}: добавлено в playbook ${defenseMode.toUpperCase()} для ${entry.incident}`);
     window.setTimeout(() => setNotice(''), 2600);
+  };
+
+  const chooseSection = (section) => {
+    setActiveSection(section.id);
+    const firstMatch = section.categories
+      ? feed.signals.find((signal) => section.categories.includes(signal.category))
+      : feed.signals[0];
+    if (firstMatch) {
+      setSelectedId(firstMatch.id);
+    }
+    setNotice(`${section.label}: раздел открыт`);
+    window.setTimeout(() => setNotice(''), 1800);
+  };
+
+  const chooseMode = (mode) => {
+    setDefenseMode(mode.toLowerCase());
+    setNotice(`${mode}: режим защиты переключен`);
+    window.setTimeout(() => setNotice(''), 1800);
   };
 
   if (loading && !feed) {
@@ -264,29 +366,30 @@ export default function Dashboard() {
           </div>
 
           <nav className="mt-6 grid gap-2">
-            {[
-              ['Threat Center', feed.active_incidents, Siren],
-              ['Access AI', 2, Fingerprint],
-              ['DLP Control', 1, FileWarning],
-              ['Phishing Lab', 3, MailWarning],
-              ['Response', 5, Lock]
-            ].map(([label, count, Icon], index) => (
+            {sections.map((section) => {
+              const Icon = section.icon;
+              const isActive = activeSection === section.id;
+              return (
               <button
-                key={label}
+                key={section.id}
+                onClick={() => chooseSection(section)}
                 className={cx(
                   'flex h-11 items-center justify-between rounded-lg border px-3 text-left text-sm transition',
-                  index === 0
+                  isActive
                     ? 'border-cyan-300/30 bg-cyan-300/10 text-cyan-100'
                     : 'border-transparent text-slate-400 hover:border-slate-700 hover:bg-slate-900'
                 )}
               >
                 <span className="flex items-center gap-2">
                   <Icon className="h-4 w-4" />
-                  {label}
+                  {section.label}
                 </span>
-                <span className="rounded-full bg-red-400/15 px-2 py-0.5 text-xs text-red-100">{count}</span>
+                <span className="rounded-full bg-red-400/15 px-2 py-0.5 text-xs text-red-100">
+                  {section.id === 'response' ? actionLog.length : sectionCounts[section.id]}
+                </span>
               </button>
-            ))}
+              );
+            })}
           </nav>
         </aside>
 
@@ -299,16 +402,17 @@ export default function Dashboard() {
               </p>
               <h2 className="mt-1 text-3xl font-black">Threat Detection & Response</h2>
               <p className="mt-1 text-sm text-slate-400">
-                Detects unauthorized access, abnormal users, data leaks, phishing, and compromise indicators in real time.
+                {currentSection.description}. Device telemetry is included in every refresh.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               {['Observe', 'Defend', 'Contain'].map((mode) => (
                 <button
                   key={mode}
+                  onClick={() => chooseMode(mode)}
                   className={cx(
                     'h-10 rounded-lg border px-4 text-sm font-semibold',
-                    mode.toLowerCase() === feed.mode
+                    mode.toLowerCase() === defenseMode
                       ? 'border-cyan-300 bg-cyan-300 text-slate-950'
                       : 'border-slate-700 bg-slate-900 text-slate-300'
                   )}
@@ -460,7 +564,20 @@ export default function Dashboard() {
                 </div>
 
                 <div className="grid gap-3">
-                  {feed.signals.map((signal) => {
+                  {activeSection === 'response' && actionLog.length > 0 && (
+                    <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-3">
+                      <p className="text-sm font-bold text-emerald-100">Playbook actions</p>
+                      <div className="mt-2 grid gap-2">
+                        {actionLog.map((entry) => (
+                          <p key={`${entry.time}-${entry.action}`} className="text-xs text-slate-300">
+                            {entry.time} · {entry.action} · {entry.incident} · {entry.mode.toUpperCase()}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {visibleSignals.map((signal) => {
                     const Icon = categoryIcons[signal.category] || Eye;
                     return (
                       <button
@@ -490,6 +607,12 @@ export default function Dashboard() {
                       </button>
                     );
                   })}
+
+                  {visibleSignals.length === 0 && (
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-400">
+                      No incidents in this section yet. The device telemetry is still being monitored.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -555,23 +678,55 @@ export default function Dashboard() {
               </div>
 
               <div className="rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
-                <h3 className="mb-3 font-bold">System Context</h3>
+                <h3 className="mb-3 font-bold">Device Analysis Context</h3>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
                     <p className="text-xs text-slate-400">CPU</p>
-                    <p className="mt-1 text-xl font-black">{status?.cpu_percent?.toFixed(1) || '0.0'}%</p>
+                    <p className="mt-1 text-xl font-black">{feed.device_context?.cpu_percent?.toFixed?.(1) || status?.cpu_percent?.toFixed(1) || '0.0'}%</p>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
                     <p className="text-xs text-slate-400">Memory</p>
-                    <p className="mt-1 text-xl font-black">{status?.memory_percent?.toFixed(1) || '0.0'}%</p>
+                    <p className="mt-1 text-xl font-black">{feed.device_context?.memory_percent?.toFixed?.(1) || status?.memory_percent?.toFixed(1) || '0.0'}%</p>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
                     <p className="text-xs text-slate-400">Processes</p>
-                    <p className="mt-1 text-xl font-black">{status?.active_processes || 0}</p>
+                    <p className="mt-1 text-xl font-black">{feed.device_context?.active_processes || status?.active_processes || 0}</p>
                   </div>
                   <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
                     <p className="text-xs text-slate-400">Connections</p>
-                    <p className="mt-1 text-xl font-black">{status?.network_connections || 0}</p>
+                    <p className="mt-1 text-xl font-black">{feed.device_context?.network_connections || status?.network_connections || 0}</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 border-t border-slate-800 pt-4">
+                  <p className="mb-2 text-sm font-bold">Top device processes</p>
+                  <div className="grid gap-2">
+                    {(feed.device_context?.process_watchlist || []).slice(0, 4).map((proc) => (
+                      <div key={`${proc.pid}-${proc.name}`} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="truncate text-sm font-semibold">{proc.name}</p>
+                          <span className="text-xs text-slate-400">PID {proc.pid}</span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-400">
+                          CPU {proc.cpu_percent}% · RAM {proc.memory_gb}GB
+                        </p>
+                      </div>
+                    ))}
+                    {(feed.device_context?.process_watchlist || []).length === 0 && (
+                      <p className="text-sm text-slate-400">Waiting for live process telemetry...</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 border-t border-slate-800 pt-4">
+                  <p className="mb-2 text-sm font-bold">Analysis basis</p>
+                  <div className="grid gap-2">
+                    {(feed.device_context?.analysis_basis || []).map((item) => (
+                      <p key={item} className="flex gap-2 text-xs leading-5 text-slate-400">
+                        <Eye className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-200" />
+                        {item}
+                      </p>
+                    ))}
                   </div>
                 </div>
               </div>
