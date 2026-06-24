@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import List, Dict, Optional
 import asyncio
 import logging
+import os
 from datetime import datetime
 from random import randint, random
 
@@ -17,6 +18,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# In demo mode (default) response actions are simulated and never terminate real
+# host processes or sockets. Set AISG_DEMO_MODE=false to enable real enforcement.
+DEMO_MODE = os.getenv("AISG_DEMO_MODE", "true").strip().lower() not in ("false", "0", "no")
+
+
 app = FastAPI(
     title="AI Shield Guardian",
     description="Real-time threat detection and anomaly analysis system",
@@ -24,10 +30,12 @@ app = FastAPI(
 )
 
 
+# allow_credentials=True together with a wildcard origin is rejected by browsers
+# per the CORS spec. This API uses no cookies/credentials, so keep it disabled.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -198,6 +206,9 @@ SOC_SCENARIOS = [
 async def startup_event():
     """Initialize monitoring on startup"""
     logger.info("AI Shield Guardian started")
+    logger.info("Demo mode: %s", "ON (actions simulated)" if DEMO_MODE else "OFF (real enforcement)")
+    # Prime the non-blocking CPU counter so the first request returns real data.
+    SystemMetrics.prime()
     logger.info("Starting system monitoring...")
 
 
@@ -558,22 +569,122 @@ async def analyze_system():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ActionRequest(BaseModel):
+    action: str
+    pid: Optional[int] = None
+    remote_addr: Optional[str] = None
+    signal_id: Optional[str] = None
+
+
+def find_connection_by_remote(remote_addr: str):
+    import psutil
+    for conn in psutil.net_connections():
+        if conn.raddr and f"{conn.raddr.ip}:{conn.raddr.port}" == remote_addr:
+            return conn
+    return None
+
+
 @app.post("/api/block_process/{pid}")
 async def block_process(pid: int):
     """Block a suspicious process"""
     try:
         import psutil
         proc = psutil.Process(pid)
+        process_name = proc.name()
+        if DEMO_MODE:
+            # Never kill real host processes in demo mode.
+            return {
+                "status": "success",
+                "message": f"Process {process_name} ({pid}) isolated (demo mode, not terminated)",
+                "process_name": process_name,
+                "simulated": True
+            }
         proc.terminate()
-        
+
         return {
             "status": "success",
-            "message": f"Process {pid} has been terminated",
-            "process_name": proc.name()
+            "message": f"Process {process_name} ({pid}) has been terminated",
+            "process_name": process_name
         }
     except Exception as e:
         logger.error(f"Error blocking process: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/block_connection")
+async def block_connection(remote_addr: str):
+    """Block a suspicious remote connection by terminating its owning process"""
+    try:
+        import psutil
+        conn = find_connection_by_remote(remote_addr)
+        if not conn or not conn.pid:
+            raise HTTPException(status_code=404, detail="No active connection found for the provided remote address")
+        proc = psutil.Process(conn.pid)
+        process_name = proc.name()
+        if DEMO_MODE:
+            # Never terminate the real owning process in demo mode.
+            return {
+                "status": "success",
+                "message": f"Connection to {remote_addr} terminated due to suspicious activity (demo mode)",
+                "process_name": process_name,
+                "pid": conn.pid,
+                "remote_addr": remote_addr,
+                "simulated": True
+            }
+        proc.terminate()
+        return {
+            "status": "success",
+            "message": f"Connection to {remote_addr} has been blocked by terminating process {process_name} ({conn.pid})",
+            "process_name": process_name,
+            "pid": conn.pid,
+            "remote_addr": remote_addr
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error blocking connection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/action")
+async def execute_action(request: ActionRequest):
+    """Execute a response action and map it to available enforcement APIs"""
+    action_text = request.action.lower()
+    if "block" in action_text and request.pid:
+        return await block_process(request.pid)
+    if "terminate" in action_text and request.pid:
+        return await block_process(request.pid)
+    if "connection" in action_text or "remote" in action_text:
+        remote_addr = request.remote_addr
+        if remote_addr:
+            try:
+                return await block_connection(remote_addr)
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    return {
+                        "status": "success",
+                        "message": f"Connection {remote_addr} terminated due to suspicious activity",
+                        "remote_addr": remote_addr,
+                        "simulated": True
+                    }
+                raise
+        if request.pid:
+            return await block_process(request.pid)
+        raise HTTPException(status_code=400, detail="remote_addr or pid is required to block a connection")
+    if "analyse" in action_text or "analyze" in action_text or "run ai analysis" in action_text:
+        result = await analyze_system()
+        return {"status": "success", "message": "AI analysis completed", "result": result}
+    if "isolate" in action_text:
+        if request.pid:
+            return await block_process(request.pid)
+        if request.remote_addr:
+            return await block_connection(request.remote_addr)
+        return {"status": "success", "message": "Host isolation is simulated in this demo environment"}
+    return {
+        "status": "success",
+        "message": f"Action '{request.action}' has been recorded",
+        "action": request.action
+    }
 
 
 @app.get("/api/metrics")

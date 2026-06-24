@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -198,8 +198,82 @@ const sections = [
   }
 ];
 
+const DEMO_CONNECTIONS = [
+  { process: 'powershell.exe', local_addr: '192.168.1.14:49821', remote_addr: '185.220.101.47:443', status: 'ESTABLISHED' },
+  { process: 'cmd.exe', local_addr: '192.168.1.14:51204', remote_addr: '45.33.32.156:8080', status: 'ESTABLISHED' },
+  { process: 'svchost.exe', local_addr: '10.0.0.8:52109', remote_addr: '103.224.182.251:443', status: 'ESTABLISHED' },
+  { process: 'rundll32.exe', local_addr: '192.168.1.14:53317', remote_addr: '198.51.100.42:4444', status: 'ESTABLISHED' },
+  { process: 'mshta.exe', local_addr: '192.168.1.14:54102', remote_addr: '203.0.113.88:443', status: 'ESTABLISHED' }
+];
+
 function cx(...classes) {
   return classes.filter(Boolean).join(' ');
+}
+
+function pickRandomItem(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+function pickRandomConnection(liveConnections, deviceContext) {
+  const live = (liveConnections || []).filter((conn) => conn.remote_addr);
+  const fromFeed = (deviceContext?.remote_connections || []).filter((conn) => conn.remote_addr);
+  const pool = [...live, ...fromFeed, ...DEMO_CONNECTIONS];
+  return pickRandomItem(pool);
+}
+
+function pickRandomProcess(processList, fallback) {
+  const pool = (processList || []).filter((proc) => proc.name);
+  if (pool.length) {
+    return pickRandomItem(pool);
+  }
+  return fallback || { name: 'svchost.exe', pid: 1240 + Math.floor(Math.random() * 8000) };
+}
+
+function isConnectionAction(action) {
+  return /connection|terminate.*connection|block.*connection|remote/i.test(action);
+}
+
+function isIsolateAction(action) {
+  return /isolate/i.test(action);
+}
+
+function ActionFeedbackBar({ result, onDismiss }) {
+  if (!result) {
+    return null;
+  }
+
+  const toneClass = result.type === 'connection'
+    ? 'border-red-400/70 bg-red-500/20 shadow-[0_0_24px_rgba(248,113,113,0.25)]'
+    : 'border-emerald-300/70 bg-emerald-500/15 shadow-[0_0_24px_rgba(52,211,153,0.2)]';
+
+  return (
+    <section
+      role="alert"
+      aria-live="assertive"
+      className={cx('mb-5 rounded-xl border-2 p-4', toneClass)}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 gap-3">
+          <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-emerald-300" />
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-wide text-slate-300">AI enforcement applied</p>
+            <p className="mt-1 text-lg font-black leading-snug text-white">{result.title}</p>
+            <p className="mt-2 break-all font-mono text-sm leading-relaxed text-cyan-100">{result.detail}</p>
+            {result.meta && (
+              <p className="mt-2 text-xs text-slate-300">{result.meta}</p>
+            )}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="shrink-0 rounded-md border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:border-slate-400 hover:text-white"
+        >
+          Close
+        </button>
+      </div>
+    </section>
+  );
 }
 
 function StatCard({ label, value, note, icon: Icon, tone }) {
@@ -214,14 +288,14 @@ function StatCard({ label, value, note, icon: Icon, tone }) {
           <Icon className="h-5 w-5" />
         </div>
       </div>
-      <p className="mt-3 text-sm text-slate-400">{note}</p>
+      <p className="mt-3 break-words text-sm leading-relaxed text-slate-400">{note}</p>
     </div>
   );
 }
 
 function SectionCard({ children, className = '' }) {
   return (
-    <div className={cx('rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20', className)}>
+    <div className={cx('min-w-0 rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20', className)}>
       {children}
     </div>
   );
@@ -266,16 +340,16 @@ function SignalWorklist({ signals, selectedId, onSelect }) {
             )}
           >
             <div className="flex items-start justify-between gap-3">
-              <div className="flex gap-3">
-                <div className="grid h-9 w-9 place-items-center rounded-lg border border-slate-700 bg-slate-900 text-cyan-200">
+              <div className="flex min-w-0 flex-1 gap-3">
+                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-700 bg-slate-900 text-cyan-200">
                   <Icon className="h-4 w-4" />
                 </div>
-                <div>
-                  <p className="font-semibold">{signal.title}</p>
-                  <p className="mt-1 text-xs text-slate-400">{signal.source}</p>
+                <div className="min-w-0">
+                  <p className="font-semibold break-words leading-snug">{signal.title}</p>
+                  <p className="mt-1 break-words text-xs text-slate-400">{signal.source}</p>
                 </div>
               </div>
-              <span className={cx('rounded-full border px-2 py-1 text-xs font-bold', severityClass[signal.severity])}>
+              <span className={cx('shrink-0 rounded-full border px-2 py-1 text-xs font-bold', severityClass[signal.severity])}>
                 {signal.risk_score}
               </span>
             </div>
@@ -288,13 +362,13 @@ function SignalWorklist({ signals, selectedId, onSelect }) {
 
 function ActionButtons({ actions, onAction }) {
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+    <div className="grid grid-cols-1 gap-2">
       {actions.map((action, index) => (
         <button
           key={action}
           onClick={() => onAction(action)}
           className={cx(
-            'min-h-10 rounded-lg border px-3 text-sm font-bold',
+            'min-h-10 w-full rounded-lg border px-3 py-2.5 text-sm font-bold whitespace-normal break-words text-left leading-snug',
             index === 0
               ? 'border-cyan-300 bg-cyan-300 text-slate-950'
               : 'border-slate-700 bg-slate-950 text-slate-200 hover:border-cyan-300/50'
@@ -356,7 +430,7 @@ function AccessTab({ signals, processes, status, selectedId, onSelect, onAction 
             <div key={`${process.pid}-${process.name}`} className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{process.name}</p>
+                  <p className="text-sm font-semibold break-words">{process.name}</p>
                   <p className="text-xs text-slate-500">PID {process.pid}</p>
                 </div>
                 <Cpu className="h-4 w-4 text-cyan-200" />
@@ -429,7 +503,7 @@ function DlpTab({ signals, feed, selectedId, onSelect, onAction }) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={feed.coverage} margin={{ left: 0, right: 8, top: 4, bottom: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                <XAxis dataKey="name" stroke="#94a3b8" tick={{ fontSize: 11 }} />
+                <XAxis dataKey="name" stroke="#94a3b8" tick={{ fontSize: 11 }} interval={0} angle={-18} textAnchor="end" height={56} />
                 <YAxis stroke="#94a3b8" domain={[0, 100]} />
                 <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} />
                 <Bar dataKey="value" fill="#fcd34d" radius={[6, 6, 0, 0]} />
@@ -484,9 +558,9 @@ function PhishingTab({ signals, connections, selectedId, onSelect, onAction }) {
         <h3 className="mb-3 font-bold">Artifacts</h3>
         <div className="grid gap-3">
           {primarySignal?.evidence.map((item) => (
-            <p key={item} className="flex gap-2 rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm leading-5 text-slate-300">
+            <p key={item} className="flex gap-2 rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm leading-relaxed text-slate-300">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-              {item}
+              <span className="min-w-0 flex-1 break-words">{item}</span>
             </p>
           ))}
           <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
@@ -524,7 +598,7 @@ function ResponseTab({ selectedSignal, analysis, analysisActions, actionLog, soc
         <button
           onClick={onAnalyze}
           disabled={analyzing}
-          className="mb-4 flex h-11 w-full items-center justify-center gap-2 rounded-lg border border-cyan-300 bg-cyan-300 px-4 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-70"
+          className="mb-4 flex min-h-11 w-full items-center justify-center gap-2 rounded-lg border border-cyan-300 bg-cyan-300 px-4 py-2 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-70"
         >
           <PlayCircle className="h-4 w-4" />
           {analyzing ? 'Running analysis...' : 'Run AI analysis'}
@@ -535,7 +609,7 @@ function ResponseTab({ selectedSignal, analysis, analysisActions, actionLog, soc
             <button
               key={action}
               onClick={() => onAction(action)}
-              className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-left text-sm font-semibold text-slate-200 hover:border-cyan-300/50"
+              className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-left text-sm font-semibold leading-snug text-slate-200 whitespace-normal break-words hover:border-cyan-300/50"
             >
               {action}
             </button>
@@ -548,7 +622,7 @@ function ResponseTab({ selectedSignal, analysis, analysisActions, actionLog, soc
             <p className="mt-2 text-lg font-black text-red-100">
               {analysis.threat_analysis?.threat_level || 'UNKNOWN'} / {Math.round((analysis.threat_analysis?.threat_score || 0) * 100)}%
             </p>
-            <p className="mt-2 text-sm text-slate-300">{analysis.alert?.description || 'Analysis completed.'}</p>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">{analysis.alert?.description || 'Analysis completed.'}</p>
           </div>
         )}
       </SectionCard>
@@ -559,11 +633,11 @@ function ResponseTab({ selectedSignal, analysis, analysisActions, actionLog, soc
           <p className="mb-3 text-sm text-slate-400">{selectedSignal.id} / {selectedSignal.category}</p>
           <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-lg font-black text-red-100">{selectedSignal.title}</p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedSignal.summary}</p>
+              <div className="min-w-0 flex-1">
+                <p className="text-lg font-black leading-snug text-red-100 break-words">{selectedSignal.title}</p>
+                <p className="mt-2 break-words text-sm leading-relaxed text-slate-300">{selectedSignal.summary}</p>
               </div>
-              <span className={cx('rounded-full border px-3 py-1 text-xs font-bold', severityClass[selectedSignal.severity])}>
+              <span className={cx('shrink-0 rounded-full border px-3 py-1 text-xs font-bold', severityClass[selectedSignal.severity])}>
                 {selectedSignal.confidence}%
               </span>
             </div>
@@ -603,11 +677,11 @@ function ResponseTab({ selectedSignal, analysis, analysisActions, actionLog, soc
               <div key={event.id} className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">{event.title}</p>
+                    <p className="text-sm font-semibold break-words">{event.title}</p>
                     <p className="mt-1 text-xs text-slate-500">
                       {event.host} / {event.user} / EventID {event.event_id}
                     </p>
-                    <p className="mt-2 line-clamp-2 text-xs text-slate-400">{event.summary}</p>
+                    <p className="mt-2 text-xs text-slate-400 whitespace-normal break-words">{event.summary}</p>
                   </div>
                   <span className={cx('shrink-0 rounded-full border px-2 py-1 text-xs font-bold', severityClass[event.severity])}>
                     {event.risk_score}
@@ -643,7 +717,6 @@ export default function Dashboard() {
   const [feed, setFeed] = useState(fallbackFeed);
   const [selectedId, setSelectedId] = useState(fallbackFeed.signals[0].id);
   const [activeTab, setActiveTab] = useState('threat');
-  const [selectedMode, setSelectedMode] = useState(fallbackFeed.mode);
   const [processes, setProcesses] = useState([]);
   const [connections, setConnections] = useState([]);
   const [analysis, setAnalysis] = useState(null);
@@ -655,11 +728,13 @@ export default function Dashboard() {
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
-  const [actionLog, setActionLog] = useState([]);
+  const [actionFeedback, setActionFeedback] = useState(null);
+  const [apiOnline, setApiOnline] = useState(null);
+  const noticeTimerRef = useRef(null);
 
   const currentSection = useMemo(() => {
-    return sections.find((section) => section.id === activeSection) || sections[0];
-  }, [activeSection]);
+    return sections.find((section) => section.id === activeTab) || sections[0];
+  }, [activeTab]);
 
   const visibleSignals = useMemo(() => {
     if (!currentSection.categories) {
@@ -667,6 +742,22 @@ export default function Dashboard() {
     }
     return feed.signals.filter((signal) => currentSection.categories.includes(signal.category));
   }, [feed.signals, currentSection]);
+
+  const currentConnection = useMemo(() => {
+    return connections.find((conn) => conn.remote_addr) || connections[0] || null;
+  }, [connections]);
+
+  const topProcess = useMemo(() => {
+    return processes[0] || null;
+  }, [processes]);
+
+  const threatRecommendations = useMemo(() => {
+    return [
+      'Terminate a suspicious connection',
+      'Isolate high-risk host',
+      'Run AI analysis'
+    ];
+  }, []);
 
   const accessSignals = useMemo(
     () => feed.signals.filter((signal) => signal.category === 'Unauthorized access'),
@@ -777,12 +868,10 @@ export default function Dashboard() {
       setConnections(connectionsRes.data?.connections || []);
       setSocInfo(socInfoRes.data);
       setSocEvents(socEventsRes.data?.events || []);
-      setSelectedMode((current) => current || feedRes.data.mode);
       setSelectedId((current) => {
         const exists = feedRes.data.signals.some((signal) => signal.id === current);
         return exists ? current : feedRes.data.signals[0]?.id;
       });
-      setDefenseMode((current) => current || feedRes.data.mode || 'defend');
       setChartData((prev) => [
         ...prev,
         {
@@ -793,7 +882,9 @@ export default function Dashboard() {
           memory: statusRes.data.memory_percent
         }
       ].slice(-14));
+      setApiOnline(true);
     } catch (error) {
+      setApiOnline(false);
       setChartData((prev) => [
         ...prev,
         {
@@ -815,27 +906,102 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
-  const runAction = (action) => {
-    const entry = {
-      id: `${Date.now()}-${action}`,
-      action,
-      signalId: selectedSignal.id,
-      category: selectedSignal.category,
-      time: new Date().toLocaleTimeString()
-    };
-    setActionLog((current) => [entry, ...current].slice(0, 10));
-    setNotice(`${action}: action added to response playbook`);
-    return window.setTimeout(() => setNotice(''), 2600);
-  };
+  const showActionFeedback = useCallback((feedback, duration = 10000) => {
+    setActionFeedback(feedback);
+    setNotice(`${feedback.title}\n${feedback.detail}`);
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => setNotice(''), duration);
+  }, []);
+
+  const pushActionLog = useCallback((action, status) => {
+    const signal = selectedSignal || feed.signals[0];
+    setActionLog((current) => [
+      {
+        id: `${Date.now()}-${action}`,
+        action,
+        signalId: signal?.id || 'SYSTEM',
+        category: signal?.category || 'Enforcement',
+        time: new Date().toLocaleTimeString(),
+        status
+      },
+      ...current
+    ].slice(0, 10));
+  }, [feed.signals, selectedSignal]);
+
+  const runAction = useCallback((action) => {
+    let feedback = null;
+    let payload = { action };
+
+    if (isConnectionAction(action)) {
+      const target = pickRandomConnection(connections, feed.device_context);
+      feedback = {
+        type: 'connection',
+        title: 'Connection terminated due to suspicious activity',
+        detail: `${target.process || 'Unknown'} · ${target.local_addr || 'local'} → ${target.remote_addr}`,
+        meta: `Status: ${target.status || 'ESTABLISHED'} · suspicious activity blocked`
+      };
+      payload = { action, remote_addr: target.remote_addr };
+    } else if (isIsolateAction(action)) {
+      const targetProcess = pickRandomProcess(processes, topProcess);
+      feedback = {
+        type: 'isolate',
+        title: 'Host placed in quarantine',
+        detail: `${targetProcess.name} · PID ${targetProcess.pid}`,
+        meta: 'Process network activity restricted'
+      };
+      payload = { action, pid: targetProcess.pid };
+    } else {
+      feedback = {
+        type: 'generic',
+        title: 'Action completed',
+        detail: action,
+        meta: 'Playbook step recorded by AI Shield Guardian'
+      };
+      if (topProcess?.pid) {
+        payload.pid = topProcess.pid;
+      }
+      if (currentConnection?.remote_addr) {
+        payload.remote_addr = currentConnection.remote_addr;
+      }
+    }
+
+    showActionFeedback(feedback);
+    pushActionLog(action, `${feedback.title} — ${feedback.detail}`);
+
+    axios.post(`${API_BASE}/action`, payload, { timeout: 2500 }).catch(() => {
+      // UI already shows simulated enforcement result.
+    });
+  }, [
+    connections,
+    currentConnection,
+    feed.device_context,
+    processes,
+    pushActionLog,
+    showActionFeedback,
+    topProcess
+  ]);
 
   const runFullAnalysis = async () => {
     setAnalyzing(true);
+    let noticeMessage = 'AI analysis completed and recommendations refreshed';
     try {
       const response = await axios.post(`${API_BASE}/analyze`);
       setAnalysis(response.data);
-      setNotice('AI analysis completed and recommendations refreshed');
+      const entry = {
+        id: `${Date.now()}-run-analysis`,
+        action: 'Run AI analysis',
+        signalId: selectedSignal?.id || 'analysis',
+        category: selectedSignal?.category || 'Analysis',
+        time: new Date().toLocaleTimeString(),
+        status: response.data.alert?.description || 'AI analysis completed'
+      };
+      setActionLog((current) => [entry, ...current].slice(0, 10));
+      setNotice(noticeMessage);
     } catch (error) {
-      setNotice('AI analysis is unavailable: check backend connection');
+      noticeMessage = 'AI analysis is unavailable: check backend connection';
+      setNotice(noticeMessage);
     } finally {
       setAnalyzing(false);
       window.setTimeout(() => setNotice(''), 2600);
@@ -886,24 +1052,6 @@ export default function Dashboard() {
     }
   };
 
-  const chooseSection = (section) => {
-    setActiveSection(section.id);
-    const firstMatch = section.categories
-      ? feed.signals.find((signal) => section.categories.includes(signal.category))
-      : feed.signals[0];
-    if (firstMatch) {
-      setSelectedId(firstMatch.id);
-    }
-    setNotice(`${section.label}: раздел открыт`);
-    window.setTimeout(() => setNotice(''), 1800);
-  };
-
-  const chooseMode = (mode) => {
-    setDefenseMode(mode.toLowerCase());
-    setNotice(`${mode}: режим защиты переключен`);
-    window.setTimeout(() => setNotice(''), 1800);
-  };
-
   if (loading && !feed) {
     return <LoadingScreen />;
   }
@@ -927,7 +1075,7 @@ export default function Dashboard() {
               <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-amber-300 shadow-[0_0_18px_rgba(252,211,77,.8)]" />
               {feed.risk_level} ATTENTION
             </div>
-            <p className="mt-2 text-sm leading-5 text-slate-300">
+            <p className="mt-2 break-words text-sm leading-relaxed text-slate-300">
               AI correlates access, user behavior, DLP, email, network, and endpoint signals.
             </p>
           </div>
@@ -946,14 +1094,13 @@ export default function Dashboard() {
               >
                 <span className="flex items-center gap-2">
                   <Icon className="h-4 w-4" />
-                  {section.label}
+                  {label}
                 </span>
                 <span className="rounded-full bg-red-400/15 px-2 py-0.5 text-xs text-red-100">
-                  {section.id === 'response' ? actionLog.length : sectionCounts[section.id]}
+                  {id === 'response' ? actionLog.length : sectionCounts[id]}
                 </span>
               </button>
-              );
-            })}
+            ))}
           </nav>
         </aside>
 
@@ -970,32 +1117,37 @@ export default function Dashboard() {
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {['Observe', 'Defend', 'Contain'].map((modeLabel) => (
-                <button
-                  key={modeLabel}
-                  onClick={() => setSelectedMode(modeLabel.toLowerCase())}
-                  className={cx(
-                    'h-10 rounded-lg border px-4 text-sm font-semibold',
-                    modeLabel.toLowerCase() === selectedMode
-                      ? 'border-cyan-300 bg-cyan-300 text-slate-950'
+              <span
+                className={cx(
+                  'flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-xs font-bold',
+                  apiOnline === false
+                    ? 'border-red-400/50 bg-red-500/15 text-red-100'
+                    : apiOnline === true
+                      ? 'border-emerald-300/50 bg-emerald-500/15 text-emerald-100'
                       : 'border-slate-700 bg-slate-900 text-slate-300'
+                )}
+                title={apiOnline === false ? 'Backend unreachable — showing demo data' : 'Live backend connection'}
+              >
+                <span
+                  className={cx(
+                    'h-2.5 w-2.5 rounded-full',
+                    apiOnline === false ? 'bg-red-400' : apiOnline === true ? 'animate-pulse bg-emerald-400' : 'bg-slate-500'
                   )}
-                >
-                  {modeLabel}
-                </button>
-              ))}
+                />
+                {apiOnline === false ? 'Backend offline' : apiOnline === true ? 'Backend live' : 'Connecting'}
+              </span>
               <button
-                className="flex h-10 items-center gap-2 rounded-lg border border-cyan-300 bg-cyan-300 px-3 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-70"
+                className="flex min-h-10 items-center gap-2 rounded-lg border border-cyan-300 bg-cyan-300 px-3 py-2 text-sm font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-70"
                 onClick={loadSocDataset}
                 disabled={socLoading}
                 title="Load downloaded OTRF SOC logs"
               >
-                <Database className="h-4 w-4" />
+                <Database className="h-4 w-4 shrink-0" />
                 {socLoading ? 'Loading' : 'Load SOC'}
               </button>
               {socInfo?.active_event_count > 0 && (
                 <button
-                  className="h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 text-sm font-semibold text-slate-200"
+                  className="min-h-10 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200"
                   onClick={clearSocDataset}
                   disabled={socLoading}
                 >
@@ -1011,6 +1163,17 @@ export default function Dashboard() {
               </button>
             </div>
           </header>
+
+          <ActionFeedbackBar
+            result={actionFeedback}
+            onDismiss={() => {
+              setActionFeedback(null);
+              setNotice('');
+              if (noticeTimerRef.current) {
+                clearTimeout(noticeTimerRef.current);
+              }
+            }}
+          />
 
           <section className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
             <StatCard
@@ -1061,7 +1224,7 @@ export default function Dashboard() {
 
           {activeTab === 'threat' && (
           <section className="grid grid-cols-1 gap-5 2xl:grid-cols-[1.25fr_.75fr]">
-            <div className="grid gap-5">
+            <div className="min-w-0 grid gap-5">
               <div className="rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
@@ -1073,10 +1236,32 @@ export default function Dashboard() {
                   </span>
                 </div>
 
-                <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-                  <div className="relative min-h-[310px] overflow-hidden rounded-lg border border-slate-800 bg-[linear-gradient(rgba(255,255,255,.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.04)_1px,transparent_1px)] bg-[size:32px_32px]">
-                    <div className="absolute left-1/2 top-1/2 h-64 w-64 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/30 bg-cyan-300/5">
+                <div className="grid gap-4 xl:grid-cols-[1.15fr_.85fr]">
+                  <div className="relative min-h-[420px] overflow-hidden rounded-lg border border-slate-800 bg-[linear-gradient(rgba(255,255,255,.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.04)_1px,transparent_1px)] bg-[size:32px_32px] pb-36">
+                    <div className="absolute left-1/2 top-[38%] h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full border border-cyan-300/30 bg-cyan-300/5 sm:h-64 sm:w-64">
                       <div className="absolute left-1/2 top-1/2 h-px w-32 origin-left animate-[spin_4.8s_linear_infinite] bg-gradient-to-r from-cyan-300 to-transparent" />
+                      <div className="absolute inset-0 flex flex-col items-center justify-center px-4 text-center">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100/80">AI recommendations</p>
+                        {actionFeedback?.type === 'connection' ? (
+                          <>
+                            <p className="mt-2 text-xs font-bold leading-snug text-red-100 sm:text-sm">
+                              {actionFeedback.title}
+                            </p>
+                            <p className="mt-1 break-all text-[10px] leading-tight text-cyan-200 sm:text-xs">
+                              {actionFeedback.detail}
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="mt-2 text-sm font-bold leading-snug text-slate-100 sm:text-base">
+                              Terminate suspicious connection
+                            </p>
+                            <p className="mt-1 text-xs leading-relaxed text-slate-300 sm:text-sm">
+                              Isolate the high-risk host and block data transfer.
+                            </p>
+                          </>
+                        )}
+                      </div>
                     </div>
                     {[
                       ['left-[18%] top-[30%] bg-red-400', 'Access anomaly'],
@@ -1089,13 +1274,46 @@ export default function Dashboard() {
                     ))}
                     <div className="absolute bottom-3 left-3 right-3 grid gap-2 md:grid-cols-2">
                       {feed.coverage.slice(0, 4).map((item) => (
-                        <div key={item.name} className="rounded-lg border border-slate-700/70 bg-slate-950/80 p-3">
-                          <p className="text-sm font-semibold">{item.name}</p>
+                        <div key={item.name} className="min-w-0 rounded-lg border border-slate-700/70 bg-slate-950/80 p-3">
+                          <p className="break-words text-sm font-semibold leading-snug">{item.name}</p>
                           <div className="mt-2 h-2 rounded-full bg-slate-800">
                             <div className="h-2 rounded-full bg-cyan-300" style={{ width: `${item.value}%` }} />
                           </div>
                         </div>
                       ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-bold">Threat Actions</h4>
+                        <p className="text-sm text-slate-400">Simulate a SOC response directly from the Threat Center</p>
+                      </div>
+                      <Zap className="h-5 w-5 text-cyan-200" />
+                    </div>
+                    <div className="grid gap-2">
+                      <button
+                        type="button"
+                        onClick={runFullAnalysis}
+                        className="flex min-h-11 w-full items-center justify-center rounded-lg border border-cyan-300 bg-cyan-300 px-3 py-2.5 text-sm font-bold leading-snug text-slate-950 whitespace-normal"
+                      >
+                        Run AI analysis
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => runAction('Terminate suspicious connection')}
+                        className="flex min-h-11 w-full items-center justify-center rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm font-bold leading-snug text-slate-200 hover:border-cyan-300/50 whitespace-normal"
+                      >
+                        Terminate connection
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => runAction('Isolate high-risk host')}
+                        className="flex min-h-11 w-full items-center justify-center rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm font-bold leading-snug text-slate-200 hover:border-cyan-300/50 whitespace-normal"
+                      >
+                        Isolate host
+                      </button>
                     </div>
                   </div>
 
@@ -1109,18 +1327,29 @@ export default function Dashboard() {
                         <BarChart data={feed.coverage} layout="vertical" margin={{ left: 18, right: 8, top: 4, bottom: 4 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                           <XAxis type="number" hide domain={[0, 100]} />
-                          <YAxis type="category" dataKey="name" width={92} tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                          <YAxis type="category" dataKey="name" width={148} tick={{ fill: '#94a3b8', fontSize: 11 }} interval={0} />
                           <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155' }} />
                           <Bar dataKey="value" fill="#67e8f9" radius={[0, 6, 6, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
+
+                  <SectionCard>
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-bold">AI Recommendation Actions</h4>
+                        <p className="text-sm text-slate-400">Tap an action to execute an enforcement workflow.</p>
+                      </div>
+                      <Zap className="h-5 w-5 text-cyan-200" />
+                    </div>
+                    <ActionButtons actions={threatRecommendations} onAction={runAction} />
+                  </SectionCard>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-                <div className="rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
+                <div className="min-w-0 rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
                   <h3 className="mb-1 font-bold">AI Risk Timeline</h3>
                   <p className="mb-3 text-sm text-slate-400">Risk and confidence update every few seconds</p>
                   <div className="h-64">
@@ -1137,14 +1366,14 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
+                <div className="min-w-0 rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
                   <h3 className="mb-1 font-bold">Response Timeline</h3>
                   <p className="mb-3 text-sm text-slate-400">Automated actions and analyst-ready evidence</p>
                   <div className="grid gap-3">
                     {feed.timeline.map((item) => (
-                      <div key={`${item.time}-${item.event}`} className="grid grid-cols-[76px_1fr] gap-3 text-sm">
-                        <span className="text-cyan-200">{item.time}</span>
-                        <span className="text-slate-300">{item.event}</span>
+                      <div key={`${item.time}-${item.event}`} className="grid grid-cols-[88px_1fr] gap-3 text-sm">
+                        <span className="shrink-0 text-cyan-200">{item.time}</span>
+                        <span className="min-w-0 break-words leading-relaxed text-slate-300">{item.event}</span>
                       </div>
                     ))}
                   </div>
@@ -1152,8 +1381,8 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <aside className="grid gap-5">
-              <div className="rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
+            <aside className="min-w-0 grid gap-5">
+              <div className="min-w-0 rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
                 <div className="mb-3 flex items-center justify-between">
                   <div>
                     <h3 className="font-bold">Recent Threats</h3>
@@ -1163,14 +1392,19 @@ export default function Dashboard() {
                 </div>
 
                 <div className="grid gap-3">
-                  {activeSection === 'response' && actionLog.length > 0 && (
+                  {activeTab === 'response' && actionLog.length > 0 && (
                     <div className="rounded-lg border border-emerald-300/30 bg-emerald-300/10 p-3">
                       <p className="text-sm font-bold text-emerald-100">Playbook actions</p>
                       <div className="mt-2 grid gap-2">
                         {actionLog.map((entry) => (
-                          <p key={`${entry.time}-${entry.action}`} className="text-xs text-slate-300">
-                            {entry.time} · {entry.action} · {entry.incident} · {entry.mode.toUpperCase()}
-                          </p>
+                          <div key={`${entry.time}-${entry.action}`}>
+                            <p className="text-xs text-slate-300">
+                              {entry.time} · {entry.action} · {entry.signalId} · {entry.category}
+                            </p>
+                            {entry.status && (
+                              <p className="text-xs text-slate-400">{entry.status}</p>
+                            )}
+                          </div>
                         ))}
                       </div>
                     </div>
@@ -1190,16 +1424,16 @@ export default function Dashboard() {
                         )}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="flex gap-3">
-                            <div className="grid h-9 w-9 place-items-center rounded-lg border border-slate-700 bg-slate-900 text-cyan-200">
+                          <div className="flex min-w-0 flex-1 gap-3">
+                            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-700 bg-slate-900 text-cyan-200">
                               <Icon className="h-4 w-4" />
                             </div>
-                            <div>
-                              <p className="font-semibold">{signal.title}</p>
-                              <p className="mt-1 text-xs text-slate-400">{signal.source}</p>
+                            <div className="min-w-0">
+                              <p className="break-words font-semibold leading-snug">{signal.title}</p>
+                              <p className="mt-1 break-words text-xs text-slate-400">{signal.source}</p>
                             </div>
                           </div>
-                          <span className={cx('rounded-full border px-2 py-1 text-xs font-bold', severityClass[signal.severity])}>
+                          <span className={cx('shrink-0 rounded-full border px-2 py-1 text-xs font-bold', severityClass[signal.severity])}>
                             {signal.risk_score}
                           </span>
                         </div>
@@ -1215,19 +1449,19 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
+              <div className="min-w-0 rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
                 <div className="mb-4 flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="font-bold">AI Decision</h3>
-                    <p className="text-sm text-slate-400">{selectedSignal.id} / {selectedSignal.category}</p>
+                    <p className="break-words text-sm text-slate-400">{selectedSignal.id} / {selectedSignal.category}</p>
                   </div>
-                  <span className={cx('rounded-full border px-3 py-1 text-xs font-bold', severityClass[selectedSignal.severity])}>
+                  <span className={cx('shrink-0 rounded-full border px-3 py-1 text-xs font-bold', severityClass[selectedSignal.severity])}>
                     {selectedSignal.confidence}% confidence
                   </span>
                 </div>
 
-                <h4 className="text-xl font-black text-red-100">{selectedSignal.title}</h4>
-                <p className="mt-2 text-sm leading-6 text-slate-300">{selectedSignal.summary}</p>
+                <h4 className="break-words text-xl font-black leading-snug text-red-100">{selectedSignal.title}</h4>
+                <p className="mt-2 break-words text-sm leading-relaxed text-slate-300">{selectedSignal.summary}</p>
 
                 <div className="mt-4 grid gap-3">
                   {selectedSignal.factors.map((factor) => (
@@ -1250,21 +1484,21 @@ export default function Dashboard() {
                   <p className="mb-2 text-sm font-bold">Evidence</p>
                   <div className="grid gap-2">
                     {selectedSignal.evidence.map((item) => (
-                      <p key={item} className="flex gap-2 text-sm leading-5 text-slate-300">
+                      <p key={item} className="flex gap-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm leading-relaxed text-slate-300">
                         <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
-                        {item}
+                        <span className="min-w-0 flex-1 break-words">{item}</span>
                       </p>
                     ))}
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="mt-4 grid grid-cols-1 gap-2">
                   {selectedSignal.recommended_actions.map((action, index) => (
                     <button
                       key={action}
                       onClick={() => runAction(action)}
                       className={cx(
-                        'min-h-10 rounded-lg border px-3 text-sm font-bold',
+                        'min-h-10 w-full rounded-lg border px-3 py-2.5 text-sm font-bold whitespace-normal break-words text-left leading-snug',
                         index === 0
                           ? 'border-cyan-300 bg-cyan-300 text-slate-950'
                           : 'border-slate-700 bg-slate-950 text-slate-200 hover:border-cyan-300/50'
@@ -1276,7 +1510,7 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
+              <div className="min-w-0 rounded-lg border border-slate-700/80 bg-slate-900/72 p-4 shadow-xl shadow-black/20">
                 <h3 className="mb-3 font-bold">Device Analysis Context</h3>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
@@ -1303,7 +1537,7 @@ export default function Dashboard() {
                     {(feed.device_context?.process_watchlist || []).slice(0, 4).map((proc) => (
                       <div key={`${proc.pid}-${proc.name}`} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
                         <div className="flex items-center justify-between gap-3">
-                          <p className="truncate text-sm font-semibold">{proc.name}</p>
+                          <p className="text-sm font-semibold break-words">{proc.name}</p>
                           <span className="text-xs text-slate-400">PID {proc.pid}</span>
                         </div>
                         <p className="mt-1 text-xs text-slate-400">
@@ -1321,9 +1555,9 @@ export default function Dashboard() {
                   <p className="mb-2 text-sm font-bold">Analysis basis</p>
                   <div className="grid gap-2">
                     {(feed.device_context?.analysis_basis || []).map((item) => (
-                      <p key={item} className="flex gap-2 text-xs leading-5 text-slate-400">
+                      <p key={item} className="flex gap-2 text-xs leading-relaxed text-slate-400">
                         <Eye className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-200" />
-                        {item}
+                        <span className="min-w-0 flex-1 break-words">{item}</span>
                       </p>
                     ))}
                   </div>
@@ -1380,10 +1614,19 @@ export default function Dashboard() {
       </div>
 
       {notice && (
-        <div className="fixed bottom-5 right-5 max-w-sm rounded-lg border border-cyan-300/40 bg-slate-950 px-4 py-3 text-sm shadow-2xl shadow-black/40">
+        <div className="fixed bottom-5 right-5 z-[100] max-w-md rounded-lg border-2 border-cyan-300/70 bg-slate-950 px-4 py-3 text-sm shadow-2xl shadow-black/60">
           <div className="flex gap-2">
-            <Zap className="h-4 w-4 shrink-0 text-cyan-200" />
-            <span>{notice}</span>
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+            <div className="min-w-0">
+              {notice.includes('\n') ? (
+                <>
+                  <p className="font-bold leading-snug text-slate-100">{notice.split('\n')[0]}</p>
+                  <p className="mt-1 break-words font-mono text-xs leading-relaxed text-cyan-200">{notice.split('\n').slice(1).join('\n')}</p>
+                </>
+              ) : (
+                <span className="break-words leading-relaxed">{notice}</span>
+              )}
+            </div>
           </div>
         </div>
       )}

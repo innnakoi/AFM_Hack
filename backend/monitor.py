@@ -1,7 +1,9 @@
+import os
+import time
 import psutil
 import threading
 from datetime import datetime
-from typing import List, Dict
+from typing import Any, Callable, List, Dict
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import logging
@@ -10,17 +12,47 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# Root path for disk usage that works on both POSIX ("/") and Windows ("C:\\").
+SYSTEM_ROOT = os.path.abspath(os.sep)
+
+# Lightweight in-process TTL cache. The dashboard polls several endpoints in
+# parallel every few seconds; without caching each call re-scans every process
+# and socket, blocking the event loop. A short TTL keeps data fresh while
+# avoiding redundant expensive scans.
+_cache_lock = threading.Lock()
+_cache: Dict[str, Any] = {}
+
+
+def cached(key: str, ttl: float, producer: Callable[[], Any]) -> Any:
+    """Return a cached value for ``key`` or recompute it via ``producer``."""
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and (now - hit[0]) < ttl:
+            return hit[1]
+    value = producer()
+    with _cache_lock:
+        _cache[key] = (time.monotonic(), value)
+    return value
+
+
 class ProcessMonitor:
     """Monitor running processes"""
     
     @staticmethod
     def get_processes() -> List[Dict]:
-        """Get list of running processes with details"""
+        """Get list of running processes with details (cached for 2s)."""
+        return cached("processes", 2.0, ProcessMonitor._collect_processes)
+
+    @staticmethod
+    def _collect_processes() -> List[Dict]:
         processes = []
         try:
             for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline', 'create_time']):
                 try:
                     pinfo = proc.as_dict(attrs=['pid', 'name', 'exe', 'cmdline', 'create_time'])
+                    # interval=None is non-blocking: it reports CPU usage since the
+                    # previous sample instead of stalling for a fixed interval.
                     pinfo['cpu_percent'] = proc.cpu_percent(interval=None)
                     pinfo['memory_percent'] = proc.memory_percent()
                     processes.append(pinfo)
@@ -96,7 +128,11 @@ class NetworkMonitor:
     
     @staticmethod
     def get_connections() -> List[Dict]:
-        """Get active network connections"""
+        """Get active network connections (cached for 2s)."""
+        return cached("connections", 2.0, NetworkMonitor._collect_connections)
+
+    @staticmethod
+    def _collect_connections() -> List[Dict]:
         connections = []
         try:
             for conn in psutil.net_connections():
@@ -139,23 +175,43 @@ class NetworkMonitor:
 
 class SystemMetrics:
     """Collect system resource metrics"""
-    
+
+    @staticmethod
+    def prime() -> None:
+        """Warm up psutil's non-blocking CPU counter.
+
+        ``cpu_percent(interval=None)`` returns 0.0 on its first call because it
+        has no previous sample to diff against. Calling it once at startup means
+        the first real request returns a meaningful value.
+        """
+        try:
+            psutil.cpu_percent(interval=None)
+        except Exception as e:
+            logger.error(f"Error priming CPU metrics: {e}")
+
     @staticmethod
     def get_metrics() -> Dict:
-        """Get current system metrics"""
+        """Get current system metrics (cached for 2s, non-blocking CPU)."""
+        return cached("metrics", 2.0, SystemMetrics._collect_metrics)
+
+    @staticmethod
+    def _collect_metrics() -> Dict:
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage(SYSTEM_ROOT)
         return {
-            'cpu_percent': psutil.cpu_percent(interval=1),
+            # interval=None is non-blocking and does not stall the event loop.
+            'cpu_percent': psutil.cpu_percent(interval=None),
             'memory': {
-                'total': psutil.virtual_memory().total,
-                'available': psutil.virtual_memory().available,
-                'percent': psutil.virtual_memory().percent,
-                'used': psutil.virtual_memory().used,
+                'total': memory.total,
+                'available': memory.available,
+                'percent': memory.percent,
+                'used': memory.used,
             },
             'disk': {
-                'total': psutil.disk_usage('/').total,
-                'used': psutil.disk_usage('/').used,
-                'free': psutil.disk_usage('/').free,
-                'percent': psutil.disk_usage('/').percent,
+                'total': disk.total,
+                'used': disk.used,
+                'free': disk.free,
+                'percent': disk.percent,
             },
             'timestamp': datetime.now()
         }
