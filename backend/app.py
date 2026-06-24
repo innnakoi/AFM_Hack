@@ -11,6 +11,7 @@ from random import randint, random
 
 from monitor import MonitoringService, ProcessMonitor, NetworkMonitor, SystemMetrics
 from detector import AnomalyDetector, ThreatAnalyzer, ModelTrainer
+from soc_logs import build_security_feed, dataset_status, load_events
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -76,8 +77,14 @@ class SecuritySignal(BaseModel):
     status: str
     detected_at: str
 
+class SocDatasetLoadRequest(BaseModel):
+    dataset_id: Optional[str] = "all"
+    max_events: Optional[int] = 1200
+
 threat_history: List[ThreatAlert] = []
 last_threat_level = "NORMAL"
+soc_events: List[Dict] = []
+soc_dataset_id: Optional[str] = None
 
 SOC_SCENARIOS = [
     {
@@ -300,6 +307,11 @@ async def get_threat_history():
 @app.get("/api/security-feed")
 async def get_security_feed():
     """Get AI security scenarios for the SOC dashboard"""
+    if soc_events:
+        feed = build_security_feed(soc_events)
+        if feed:
+            return feed
+
     metrics = SystemMetrics.get_metrics()
     processes = ProcessMonitor.get_processes()
     connections = NetworkMonitor.get_connections()
@@ -350,6 +362,57 @@ async def get_security_feed():
             {"name": "Endpoint compromise", "value": 74}
         ],
         "last_update": datetime.now().isoformat()
+    }
+
+
+@app.get("/api/soc/datasets")
+async def get_soc_datasets():
+    """List downloaded SOC datasets available for replay"""
+    return {
+        "datasets": dataset_status(),
+        "active_dataset_id": soc_dataset_id,
+        "active_event_count": len(soc_events)
+    }
+
+
+@app.post("/api/soc/load")
+async def load_soc_dataset(request: SocDatasetLoadRequest):
+    """Load normalized OTRF SOC events into dashboard replay mode"""
+    global soc_events, soc_dataset_id
+
+    max_events = min(max(request.max_events or 1200, 50), 5000)
+    events = load_events(request.dataset_id, max_events)
+    if not events:
+        raise HTTPException(status_code=404, detail="SOC dataset is not available or contains no readable events")
+
+    soc_events = events
+    soc_dataset_id = request.dataset_id or "all"
+    return {
+        "status": "loaded",
+        "dataset_id": soc_dataset_id,
+        "event_count": len(soc_events),
+        "top_events": sorted(soc_events, key=lambda event: event["risk_score"], reverse=True)[:10],
+        "feed": build_security_feed(soc_events)
+    }
+
+
+@app.post("/api/soc/clear")
+async def clear_soc_dataset():
+    """Return dashboard to synthetic live monitoring mode"""
+    global soc_events, soc_dataset_id
+    soc_events = []
+    soc_dataset_id = None
+    return {"status": "cleared"}
+
+
+@app.get("/api/soc/events")
+async def get_soc_events(limit: int = 100):
+    """Return normalized SOC replay events"""
+    safe_limit = min(max(limit, 1), 500)
+    return {
+        "dataset_id": soc_dataset_id,
+        "event_count": len(soc_events),
+        "events": sorted(soc_events, key=lambda event: event["risk_score"], reverse=True)[:safe_limit]
     }
 
 

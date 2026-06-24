@@ -21,8 +21,8 @@ class ProcessMonitor:
             for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline', 'create_time']):
                 try:
                     pinfo = proc.as_dict(attrs=['pid', 'name', 'exe', 'cmdline', 'create_time'])
-                    pinfo['cpu_percent'] = proc.cpu_percent(interval=0.1)
-                    pinfo['memory_percent'] = proc.memory_info().rss / (1024 ** 3)  # GB
+                    pinfo['cpu_percent'] = proc.cpu_percent(interval=None)
+                    pinfo['memory_percent'] = proc.memory_percent()
                     processes.append(pinfo)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass

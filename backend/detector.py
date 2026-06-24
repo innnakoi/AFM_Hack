@@ -154,7 +154,7 @@ class ThreatAnalyzer:
             threat_score += 0.25
         
         # Check for suspicious executable paths
-        exe = process_data.get('exe', '').lower()
+        exe = (process_data.get('exe') or '').lower()
         suspicious_paths = ['temp', 'appdata', 'users', 'downloads']
         if any(path in exe for path in suspicious_paths):
             threat_factors.append("Suspicious executable location")
