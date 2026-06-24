@@ -315,6 +315,40 @@ async def get_security_feed():
     metrics = SystemMetrics.get_metrics()
     processes = ProcessMonitor.get_processes()
     connections = NetworkMonitor.get_connections()
+    suspicious_ips = NetworkMonitor.get_suspicious_ips()
+
+    process_watchlist = sorted(
+        [
+            {
+                "pid": p.get("pid"),
+                "name": p.get("name") or "Unknown",
+                "cpu_percent": round(float(p.get("cpu_percent") or 0), 1),
+                "memory_gb": round(float(p.get("memory_percent") or 0), 3),
+                "exe": p.get("exe") or "No executable path"
+            }
+            for p in processes
+        ],
+        key=lambda p: (p["cpu_percent"], p["memory_gb"]),
+        reverse=True
+    )[:8]
+
+    remote_connections = [
+        {
+            "process": c.get("process") or "Unknown",
+            "remote_addr": c.get("remote_addr"),
+            "status": c.get("status")
+        }
+        for c in connections
+        if c.get("remote_addr")
+    ][:8]
+
+    top_process = process_watchlist[0] if process_watchlist else {
+        "name": "No process sample",
+        "pid": 0,
+        "cpu_percent": 0,
+        "memory_gb": 0,
+        "exe": "No executable path"
+    }
 
     dynamic_risk = min(
         99,
@@ -323,7 +357,9 @@ async def get_security_feed():
             int(
                 SOC_SCENARIOS[0]["risk_score"]
                 + (metrics["memory"]["percent"] - 70) * 0.18
+                + max(0, top_process["cpu_percent"] - 50) * 0.12
                 + len(connections) * 0.015
+                + len(suspicious_ips) * 6
                 + randint(-3, 3)
             )
         )
@@ -332,10 +368,34 @@ async def get_security_feed():
     signals = []
     for index, scenario in enumerate(SOC_SCENARIOS):
         item = dict(scenario)
+        item["evidence"] = list(scenario["evidence"])
+        item["factors"] = [dict(factor) for factor in scenario["factors"]]
         item["detected_at"] = datetime.now().isoformat()
         if index == 0:
             item["risk_score"] = dynamic_risk
             item["confidence"] = min(98, max(86, item["confidence"] + randint(-2, 2)))
+            item["evidence"].append(
+                f"Live device context: CPU {metrics['cpu_percent']}%, RAM {metrics['memory']['percent']}%, "
+                f"{len(processes)} running processes, {len(connections)} active connections."
+            )
+            item["factors"].append({"name": "Live telemetry", "weight": min(98, dynamic_risk)})
+        if item["category"] == "Endpoint behavior":
+            item["source"] = f"{top_process['name']} / PID {top_process['pid']}"
+            item["summary"] = (
+                f"Current device telemetry highlights {top_process['name']} as the highest priority process "
+                f"by CPU/RAM footprint."
+            )
+            item["evidence"] = [
+                f"Process {top_process['name']} uses {top_process['cpu_percent']}% CPU and {top_process['memory_gb']}GB RAM.",
+                f"Executable path: {top_process['exe']}",
+                f"Network table currently contains {len(connections)} active or recent connections."
+            ]
+            item["factors"] = [
+                {"name": "CPU footprint", "weight": min(100, int(top_process["cpu_percent"]))},
+                {"name": "Memory footprint", "weight": min(100, int(top_process["memory_gb"] * 25))},
+                {"name": "Connection pressure", "weight": min(100, len(connections))}
+            ]
+            item["risk_score"] = max(item["risk_score"], min(85, int(top_process["cpu_percent"] * 0.6 + len(connections) * 0.08)))
         signals.append(item)
 
     return {
@@ -347,12 +407,26 @@ async def get_security_feed():
         "protected_assets": 1248 + len(processes),
         "active_incidents": len([s for s in signals if s["severity"] in ["HIGH", "CRITICAL"]]),
         "signals": signals,
+        "device_context": {
+            "cpu_percent": metrics["cpu_percent"],
+            "memory_percent": metrics["memory"]["percent"],
+            "disk_percent": metrics["disk"]["percent"],
+            "active_processes": len(processes),
+            "network_connections": len(connections),
+            "suspicious_ips": suspicious_ips,
+            "process_watchlist": process_watchlist,
+            "remote_connections": remote_connections,
+            "analysis_basis": [
+                "Live CPU, RAM, disk, process, and connection telemetry from the monitored device.",
+                "Process priority is ranked by CPU and resident memory footprint.",
+                "Network evidence is sampled from current remote connections."
+            ]
+        },
         "timeline": [
-            {"time": "13:21:43", "event": "AI correlated IAM, DLP, email, and endpoint signals."},
-            {"time": "13:22:08", "event": "DLP blocked finance-q2.zip export to an external domain."},
-            {"time": "13:22:35", "event": "Mail gateway quarantined 42 phishing messages."},
-            {"time": "13:23:01", "event": "Step-up MFA was required for a risky user session."},
-            {"time": "13:23:21", "event": "Endpoint-117 switched to evidence collection mode."}
+            {"time": datetime.now().strftime("%H:%M:%S"), "event": f"Device telemetry collected: {len(processes)} processes and {len(connections)} connections."},
+            {"time": datetime.now().strftime("%H:%M:%S"), "event": f"Top process analyzed: {top_process['name']} PID {top_process['pid']}."},
+            {"time": datetime.now().strftime("%H:%M:%S"), "event": "AI correlated device telemetry with IAM, DLP, email, and endpoint scenarios."},
+            {"time": datetime.now().strftime("%H:%M:%S"), "event": "Risk explanation refreshed for analyst review."}
         ],
         "coverage": [
             {"name": "Unauthorized access", "value": 96},
